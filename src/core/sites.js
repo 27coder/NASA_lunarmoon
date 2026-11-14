@@ -49,8 +49,33 @@ export const SITES = [
   { id: 'luna9', name: 'Luna 9 (USSR)', group: 'intl', lat: 7.08, lon: -64.37, precision: 'reported', note: 'First soft landing on the Moon, 1966.' },
 ];
 
+// Hand-picked ridge points. Their computed values appear in the window summary;
+// near crests they depend strongly on the 240 m terrain resolution.
+export const COMPUTED_SITES = [
+  {
+    id: 'ridge',
+    name: 'Shackleton connecting ridge',
+    short: 'Connecting ridge',
+    group: 'computed',
+    lat: -89.45,
+    lon: -137.31,
+    precision: 'computed',
+    note: 'High point on the ridge joining Shackleton and de Gerlache craters, an area that LOLA lighting studies rank among the best-lit at the pole. At a ridge crest a 240 m terrain grid cannot resolve the local slope, so treat the sunlight figures here as approximate (they can shift by several percentage points).',
+  },
+  {
+    id: 'peak-shackleton',
+    name: 'Ridge high point near Shackleton (88.8°S)',
+    short: 'Peak near Shackleton',
+    group: 'computed',
+    lat: -88.81,
+    lon: 123.64,
+    precision: 'computed',
+    note: 'An elevated massif about 30 km from Shackleton. It is well lit, but Earth is hidden for long stretches: the classic power-versus-communication trade-off. Crest values are sensitive to terrain resolution.',
+  },
+];
+
 export function siteById(id) {
-  return SITES.find((s) => s.id === id) ?? null;
+  return COMPUTED_SITES.find((s) => s.id === id) ?? SITES.find((s) => s.id === id) ?? null;
 }
 
 /** Parse "lat, lon" in decimal degrees (S/W negative or with N/S/E/W suffixes). */

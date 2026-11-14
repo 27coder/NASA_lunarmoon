@@ -7,7 +7,7 @@ import './styles.css';
 import { createMoonScene } from './scene/moonScene.js';
 import { loadTerrain } from './core/horizon.js';
 import { DEFAULT_CONFIG, evaluate, isEarthUp, isSunUp, nextTransition, prepareSite, scan } from './core/analysis.js';
-import { SITES, SITE_GROUPS, parseCoordinates } from './core/sites.js';
+import { COMPUTED_SITES as CURATED_COMPUTED, SITES, SITE_GROUPS, parseCoordinates } from './core/sites.js';
 import { RADIO_PRESETS } from './core/comms.js';
 import { PANEL_MODES } from './core/power.js';
 import { SYNODIC_MONTH_DAYS } from './core/ephemeris.js';
@@ -24,30 +24,7 @@ const DATA = `${import.meta.env.BASE_URL}data`;
 const $ = (sel) => document.querySelector(sel);
 const STEP_FOR_WINDOW = { 15: 10, 30: 20, 90: 60, 365: 180 }; // minutes
 
-// Hand-picked ridge points. Their computed values appear in the window summary;
-// near crests they depend strongly on the 240 m terrain resolution.
-const CURATED_COMPUTED = [
-  {
-    id: 'ridge',
-    name: 'Shackleton connecting ridge',
-    short: 'Connecting ridge',
-    group: 'computed',
-    lat: -89.45,
-    lon: -137.31,
-    precision: 'computed',
-    note: 'High point on the ridge joining Shackleton and de Gerlache craters, an area that LOLA lighting studies rank among the best-lit at the pole. At a ridge crest a 240 m terrain grid cannot resolve the local slope, so treat the sunlight figures here as approximate (they can shift by several percentage points).',
-  },
-  {
-    id: 'peak-shackleton',
-    name: 'Ridge high point near Shackleton (88.8°S)',
-    short: 'Peak near Shackleton',
-    group: 'computed',
-    lat: -88.81,
-    lon: 123.64,
-    precision: 'computed',
-    note: 'An elevated massif about 30 km from Shackleton. It is well lit, but Earth is hidden for long stretches: the classic power-versus-communication trade-off. Crest values are sensitive to terrain resolution.',
-  },
-];
+
 
 const app = {
   terrain: null,

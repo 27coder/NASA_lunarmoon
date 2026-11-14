@@ -122,6 +122,20 @@ button.primary:hover {
 button.ghost {
   background: transparent;
 }
+a.mode-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 6px 11px;
+  border: 1px solid var(--action, var(--line-strong));
+  border-radius: var(--radius);
+  color: var(--action, inherit);
+  font-weight: 600;
+  text-decoration: none;
+}
+a.mode-link:hover {
+  background: var(--surface-2);
+}
 button.ghost:hover {
   background: var(--surface-2);
 }
