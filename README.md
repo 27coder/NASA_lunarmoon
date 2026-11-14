@@ -1,96 +1,100 @@
-# Lunar Site Planner
+# Lunar Site Planner & Mission Explorer
 
-A browser tool for comparing lunar landing sites and dates. For any point on the Moon and any UTC date it shows where the Sun and Earth sit relative to the local terrain horizon, estimates solar-array output, and checks whether a direct-to-Earth radio link is possible. It was built for the NASA Space Apps Challenge 2026, *CLPS Lunar Mission Browser*.
+An interactive web application for exploring, learning, and evaluating lunar landing sites and operational dates for Artemis and CLPS missions. For any point on the Moon and any UTC date, it computes topocentric Sun and Earth vectors relative to the local LOLA terrain horizon, estimates solar power generation, evaluates direct-to-Earth (DTE) radio links with DSN coverage, and compares mission scenarios.
 
-![Lunar Site Planner](docs/screenshot.png)
+Built for the NASA Space Apps Challenge, *CLPS Lunar Mission Browser*.
 
-Live site: published by GitHub Pages from `main` (see [Deployment](#deployment)).
+---
 
-## Quick start
+## 🌟 Application Modes
+
+The application features three integrated modes in `index.html`, plus an advanced CesiumJS expert mode in `planner.html`:
+
+### 1. 🛰️ Mission Explorer
+- **Interactive 3D Moon Globe**: Real-time Three.js lunar globe with physically oriented Sun direction lighting, sub-Earth/sub-solar line rays, and camera presets (*South Pole*, *Fly to Site*, *Overview*, *Earth-Moon Line*).
+- **South-Pole LOLA Polar Stereographic Map**: High-resolution 2D canvas map with toggleable WAC basemap, 2027 illumination overlay, and Earth visibility contours.
+- **Operations Timeline**: 4-track interactive canvas timeline (Sun elevation, Solar power output, Earth elevation, and Direct-to-Earth link windows) with time scrubbing and playback.
+- **Assessment Panel**: Gauge meters for peak and instantaneous solar power, link margin (dB), horizon skyline SVG with Sun/Earth elevations, and operational event countdowns.
+
+### 2. 🦉 Duolingo-Style Learning Map (Lunar Academy)
+- **Gamified Progression**: Serpentine node map spanning 3 comprehensive curriculum units:
+  - *Unit 1: Polar Light & Shadows* (Why the poles?, Shackleton Crater, Peak of Eternal Light).
+  - *Unit 2: Solar Power & Cold Surviving* (Solar arrays, Battery drawdown, Surviving the lunar night).
+  - *Unit 3: Direct-to-Earth Communications* (Line of sight, DSN coverage, Multi-site trade-offs).
+- **Interactive Lessons & Quizzes**: Multiple-choice questions with immediate visual feedback, explanation callouts, XP tracking, and streak counters.
+- **Lumi the Mascot**: Dynamic animated SVG mascot reacting with custom emotional states (*proud*, *happy*, *thinking*, *crying*, *starry*).
+- **Deep Links**: Lesson simulation buttons link directly into the Mission Explorer configured with exact site and time parameters.
+
+### 3. ⚖️ Scenario Comparison Lab
+- **Multi-Site & Launch Slip Evaluation**: Compare landing sites side-by-side across sunlit %, average power, longest darkness, battery drawdown, and DTE link margin.
+- **Schedule Slip ×3**: Automatically calculate trade-offs for +1, +2, and +3 synodic month launch slips (~29.53 days each).
+- **Nearby Alternatives Scanner**: Scan LOLA terrain within 5 km for elevated ridge points with improved solar visibility.
+- **CSV Export**: Export all evaluated metrics and window parameters to spreadsheet-ready CSV.
+
+### 4. 🔭 Expert Mode (`planner.html`)
+- Full CesiumJS 3D Moon digital elevation model (DEM) with optional Cesium Ion high-resolution terrain streaming and Artemis candidate region boundaries.
+
+---
+
+## 🚀 Quick Start
 
 ```bash
 npm install
-npm run dev          # http://localhost:5174
+npm run dev          # Start local dev server at http://localhost:5174
 ```
 
 ```bash
-npm test             # unit tests (geometry, terrain, power, comms, comparison)
-npm run build        # static site in dist/
+npm test             # Run test suite (Node.js ESM test runner)
+npm run build        # Build production-ready bundle into dist/
 ```
 
-No API keys are needed: terrain, imagery, fonts and ephemerides all work offline. An optional [Cesium ion](https://ion.cesium.com/tokens) token (in `.env` as `VITE_CESIUM_ION_TOKEN=...`, or under **Spacecraft**) adds Cesium Moon Terrain tiles and NASA's Artemis candidate landing regions as visual layers. All numbers still come from the bundled LOLA grids.
+No API keys are required: terrain data, imagery, ephemeris calculations, and fonts all function offline.
 
-New users can press **Tour** for a guided walkthrough that uses the real controls. The **?** buttons next to technical terms open short definitions.
+---
 
-## What it does
+## 📐 Scientific Model & Data Sources
 
-| Question | Where in the app |
-|---|---|
-| Which sites can I look at? | Site list (south-pole features, CLPS and other missions, Apollo, points chosen from LOLA terrain), a click on the 3D Moon or the south-pole map, or typed coordinates (`-89.45, -137.3` or `89.45S 137.3W`). |
-| Where are the Sun and Earth from this site? | The sky plot draws the terrain skyline with the Sun and Earth paths over the analysis window. In 3D, the Moon is lit from the computed Sun direction, and "Stand here" views look along the Sun or Earth direction from mast height. |
-| Is there power? | Array output against the continuous load, the visible fraction of the solar disk, time sunlit, longest darkness and an estimated battery size. |
-| Can the lander talk to Earth? | Earth's clearance above the terrain, which Deep Space Network complexes can see the Moon, a first-order link budget, light time, and the next Earthset or Earthrise. |
-| How do dates and sites compare? | The operations timeline (click, drag or use the arrow keys), and the comparison table with schedule slips of one to three lunar months and a search for better-lit points within 5 km. Results export to CSV and to shareable links. |
+All calculations run in pure browser-compatible ES modules located in `src/core/`:
+- **Sun & Earth Ephemerides**: Computed via [astronomy-engine](https://github.com/cosinekitty/astronomy) rotated into the lunar body-fixed Mean Earth/Polar Axis frame using IAU/WGCCRE rotational models and optical librations.
+- **Terrain Horizons**: Sampled over LRO LOLA elevation grids (including lunar spherical curvature).
+- **Power Model**: Solar constant $1361\text{ W/m}^2 \times (1\text{ AU} / r)^2 \times \text{visible solar fraction} \times \cos(\theta) \times \text{area} \times \text{efficiency}$.
+- **Communications**: Topocentric free-space path loss and grazing diffraction margin to NASA Deep Space Network (DSN) 34 m ground antennas (Goldstone, Madrid, Canberra).
 
-## How the numbers are made
+---
 
-All calculations run in the browser from pure functions in `src/core/`, shared by the interface, the tests and the offline tools.
-
-- **Sun and Earth positions** come from [astronomy-engine](https://github.com/cosinekitty/astronomy), rotated into the Moon's body-fixed frame with the IAU/WGCCRE rotation model (including libration terms). Positions are topocentric.
-- **Terrain horizons** are traced along 720 azimuths out to 300 km over LRO LOLA heights (a 240 m grid within 180 km of the pole and a 1 km grid to 75°S), including the Moon's curvature. Sites north of 75°S use a bare-sphere horizon, and the app says so.
-- **Definitions.** "Time sunlit" and "Earth visible" count the time that any part of the Sun's or Earth's disk is above the terrain, the definition NASA Goddard uses for its polar illumination maps. A direct-to-Earth link additionally needs Earth's centre above the terrain, by a configurable clearance (default 2°). The 2027 map overlay shows the average visible fraction of the solar disk and the share of time Earth's centre is visible, and is labelled that way.
-- **Power** = 1361 W/m² × (1 AU / r)² × visible fraction of the solar disk × panel incidence × area × efficiency. Battery size is the deepest cumulative energy deficit against the load. These are first-order estimates.
-- **Communications** use a first-order link budget to a DSN 34 m antenna. The reported data rate is limited by both the link budget and an assumed maximum for the selected radio.
-
-### Validation
-
-- Unit tests check sub-Earth points, lunar obliquity, the polar stereographic projection, disk geometry, link budgets, DSN coverage, and physical cases: Shackleton's floor is permanently shadowed, Chang'e 4 never sees Earth, and Apollo 11 has two-week days.
-- During a project audit (November 2026) the geometry was compared with NASA/JPL SPICE (DE421 ephemeris, Moon Mean-Earth frame): Sun and Earth directions agreed within 0.008°. The 18.6-year sunlight and Earth-visibility percentages were compared with NASA Goddard's PGDA polar illumination maps at 3,721 points: sunlight RMSE 4.2 percentage points (r = 0.96), Earth visibility RMSE 5.6 percentage points (r = 0.97). The reproduction scripts are not yet in this repository.
-
-### Known limits
-
-- The 240 m and 1 km grids smooth out features smaller than about 0.5–1 km. At ridge crests, sunlight percentages can shift by several percentage points, and longest-night values by days, depending on how the terrain right around the lander is treated. Real site selection uses 5–60 m terrain products.
-- Terrain covers the south polar region to 75°S only.
-- Power, battery and link values are first-order estimates. Relay satellites, other ground networks, landing slopes and hazards are not modelled.
-- Coordinates marked "approximate" are feature centres or targets to about 0.1°. Apollo positions are LROC-surveyed (Wagner et al. 2017).
-
-## Data and credits
-
-- **LOLA RDR** laser altimetry (NASA GSFC, Lunar Reconnaissance Orbiter) and **LROC WAC** global and south-polar mosaics (NASA, GSFC, Arizona State University), via the USGS Astrogeology Analysis Ready Data archive (`s3://astrogeo-ard/moon/…`). Public domain.
-- Earth texture: Natural Earth II tiles bundled with CesiumJS.
-- Libraries: [CesiumJS](https://cesium.com/platform/cesiumjs/) (Apache-2.0), [astronomy-engine](https://github.com/cosinekitty/astronomy) (MIT). Fonts: IBM Plex Sans and IBM Plex Mono (SIL Open Font License), self-hosted through Fontsource.
-- References: Mazarico et al. (2011), *Icarus* 211, 1066–1081; Archinal et al. (2018), *Celestial Mechanics and Dynamical Astronomy* 130:22; Kopp and Lean (2011), *Geophysical Research Letters* 38, L01706; Wagner et al. (2017), *Icarus* 283, 92–103.
-
-## Reproducing the bundled data
-
-```bash
-pip install "laspy[lazrs]" requests numpy scipy rasterio pillow
-python tools/build_polar_dem.py public/data      # LOLA grids (about 7 min)
-python tools/build_imagery.py public/data        # LROC imagery
-node tools/illumination_map.mjs 75 1 2027        # 2027 map overlay (about 7 min on 4 cores)
-```
-
-## Tests
-
-```bash
-npm test                                         # unit tests
-npm i --no-save playwright && npx playwright install chromium
-npm run dev &                                    # in another terminal is fine too
-npm run test:e2e                                 # browser checks of every control, the tour and phone layout
-```
-
-## Deployment
-
-The workflow in `.github/workflows/deploy.yml` runs the unit tests and publishes `dist/` to GitHub Pages on every push to `main`. Pull requests run the tests only. To enable it once: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
-
-## Layout
+## 📁 Repository Layout
 
 ```
-index.html, vite.config.js, package.json
-src/core/      ephemeris, horizon (LOLA), power, comms, analysis, sites, geo
-src/scene/     CesiumJS Moon scene
-src/ui/        sky plot, timeline, polar map, results panel, comparison, glossary, tour
-public/data/   LOLA grids, LROC imagery, 2027 map overlay
-tools/         data build scripts
-test/          unit tests and the browser end-to-end check
+├── index.html                   # Main entry point (Mission Explorer, Academy, Compare Lab)
+├── planner.html                 # CesiumJS 3D expert mode
+├── src/
+│   ├── main.js                  # Main application orchestrator & state manager
+│   ├── academy/
+│   │   ├── academyView.js       # Duolingo-style learning map UI & quiz modals
+│   │   ├── content.js           # 3 Academy units, nodes, and quiz data
+│   │   └── mascot.js            # Lumi mascot SVG generator
+│   ├── scene/
+│   │   └── globeRenderer.js     # Three.js 3D lunar globe with Sun & Earth vectors
+│   ├── ui/
+│   │   ├── polarMap.js          # 2D LOLA South-Pole canvas renderer
+│   │   ├── timeline.js          # Multi-track operations timeline canvas
+│   │   ├── skyplot.js           # 360° horizon elevation skyline
+│   │   ├── assessment.js        # Power & link assessment panel
+│   │   ├── compare.js           # Comparison Lab & CSV exporter
+│   │   ├── modals.js            # Guided tour & glossary modals
+│   │   └── format.js            # Formatters for coordinates, time, units
+│   ├── core/
+│   │   ├── analysis.js          # Unified site evaluation & window scanner
+│   │   ├── horizon.js           # Ray-marched and precomputed terrain horizons
+│   │   ├── ephemeris.js         # Sun and Earth lunar-centric ephemeris
+│   │   ├── comms.js             # DSN visibility and RF link budgets
+│   │   ├── power.js             # Solar array and battery sizing models
+│   │   ├── geo.js               # Lunar coordinate transformations & ENU frames
+│   │   └── constants.js         # Physical constants, glossary, site metadata
+│   ├── data/                    # Bundled ES module data sources
+│   └── styles.css               # Design tokens, typography & animations
+├── public/data/                 # Static textures, LOLA DEM, and illumination maps
+├── test/
+│   └── core.spec.js             # 24 automated unit tests
+└── package.json
 ```

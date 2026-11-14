@@ -1,12 +1,9 @@
-// Scenario comparison table: each row is a site + landing date + window.
-// Columns are the trade-offs planners argue about. The best and worst value in a
-// column are marked only when they differ by more than the column's tolerance,
-// so differences inside the model's resolution are not presented as real.
+// Scenario Comparison Lab: multi-site & launch-slip evaluation and CSV export.
+import { esc, fmtHours, fmtLatLon, pct } from './format.js';
+import { SYNODIC_MONTH_DAYS } from '../core/constants.js';
+import { prepareSite, scanWindow } from '../core/analysis.js';
 
-import { escapeHtml, fmtHours, fmtLatLon, pct } from './format.js';
-import { drawStrip } from './timeline.js';
-
-const COLUMNS = [
+export const COLUMNS = [
   { key: 'litFraction', label: 'Sunlit', fmt: (v) => pct(v, 1), better: 'high', tol: 0.03 },
   { key: 'avgPowerW', label: 'Avg power', fmt: (v) => `${v.toFixed(0)} W`, better: 'high', tolRel: 0.05 },
   { key: 'longestDarkH', label: 'Longest dark', fmt: fmtHours, better: 'low', tol: 12, open: 'longestDarkOpenEnded' },
@@ -16,7 +13,7 @@ const COLUMNS = [
   { key: 'longestBlackoutH', label: 'Longest blackout', fmt: fmtHours, better: 'low', tol: 12, open: 'longestBlackoutOpenEnded' },
 ];
 
-// Illustrative screening thresholds, shown to the user under the table.
+// Illustrative screening thresholds
 export const CRITERIA = {
   minLit: 0.5,
   maxDarkH: 120,
@@ -35,61 +32,86 @@ export function verdictFor(stats) {
   return { status: 'no-go', text: 'Neither' };
 }
 
-function spreadIsMeaningful(col, best, worst) {
-  const diff = Math.abs(best - worst);
-  const tol = Math.max(col.tol ?? 0, (col.tolRel ?? 0) * Math.max(Math.abs(best), Math.abs(worst)));
-  return diff > tol;
+let scenarioSeq = 0;
+
+export function addScenario(app, site, startMs, label) {
+  const ctx = prepareSite(site, app.config);
+  const sc = scanWindow(ctx, startMs, app.windowDays, app.config);
+  const item = { id: `sc-${++scenarioSeq}`, site, startMs, windowDays: app.windowDays, label, scan: sc };
+  app.scenarios.push(item);
+  const countEl = document.getElementById('headerCompareCount');
+  if (countEl) countEl.textContent = String(app.scenarios.length);
+  return item;
 }
 
-export function renderCompare(root, scenarios, { activeId, onSelect, onRemove }) {
-  if (!scenarios.length) {
-    root.innerHTML = `<p class="hint" style="padding:10px 0 0">Add the current site and date, slip the landing by whole lunar months, or search the terrain within 5 km for better-lit points. Every row uses the same spacecraft assumptions.</p>`;
+export function renderCompareTable(container, app, onOpenScenario) {
+  if (!container) return;
+  if (!app.scenarios.length) {
+    container.innerHTML = `<div class="text-center py-8 text-xs text-slate-500">No scenarios added yet. Click <strong>+ Add Current Site &amp; Date</strong>, <strong>Schedule Slip ×3</strong>, or <strong>Find Nearby Alternatives</strong> above to compare trade-offs!</div>`;
     return;
   }
-  const marks = {};
-  for (const col of COLUMNS) {
-    const vals = scenarios.map((s) => s.scan.stats[col.key]);
-    const best = col.better === 'high' ? Math.max(...vals) : Math.min(...vals);
-    const worst = col.better === 'high' ? Math.min(...vals) : Math.max(...vals);
-    marks[col.key] = scenarios.length > 1 && spreadIsMeaningful(col, best, worst) ? { best, worst } : null;
-  }
-  root.innerHTML = `
-    <table class="cmp">
-      <caption class="visually-hidden">Scenario comparison</caption>
-      <thead><tr>
-        <th scope="col">Scenario</th><th scope="col">Sun · Earth · DTE over the window</th>
-        ${COLUMNS.map((c) => `<th scope="col">${c.label}</th>`).join('')}
-        <th scope="col">Screening</th><th scope="col"><span class="visually-hidden">Remove</span></th>
-      </tr></thead>
+  container.innerHTML = `
+    <table class="w-full text-xs border-collapse">
+      <thead>
+        <tr class="border-b border-slate-200 text-slate-500 text-right">
+          <th class="text-left py-2 px-2">Scenario</th>
+          <th class="py-2 px-2">Sunlit %</th>
+          <th class="py-2 px-2">Avg Power</th>
+          <th class="py-2 px-2">Longest Dark</th>
+          <th class="py-2 px-2">Battery Est.</th>
+          <th class="py-2 px-2">Earth Visible</th>
+          <th class="py-2 px-2">DTE Link</th>
+          <th class="py-2 px-2">Screening</th>
+          <th class="py-2 px-2"></th>
+        </tr>
+      </thead>
       <tbody>
-        ${scenarios
-          .map((s) => {
-            const v = verdictFor(s.scan.stats);
-            return `<tr data-id="${s.id}" class="${s.id === activeId ? 'active' : ''}">
-              <td class="scenario"><button class="open" data-open="${s.id}" title="Open this scenario">${escapeHtml(s.label)}</button><br><span class="meta">${fmtLatLon(s.site.lat, s.site.lon, 2)} · ${new Date(s.startMs).toISOString().slice(0, 10)} · ${s.windowDays} d</span></td>
-              <td><canvas class="strip" data-strip="${s.id}" role="img" aria-label="Sun, Earth and link availability over the window"></canvas></td>
-              ${COLUMNS.map((c) => {
-                const val = s.scan.stats[c.key];
-                const m = marks[c.key];
-                const cls = m ? (val === m.best ? 'best' : val === m.worst ? 'worst' : '') : '';
-                const sr = cls === 'best' ? '<span class="visually-hidden"> (best)</span>' : cls === 'worst' ? '<span class="visually-hidden"> (worst)</span>' : '';
-                const ge = c.open && s.scan.stats[c.open] && val > 0 ? '≥ ' : '';
-                return `<td class="${cls}">${ge}${c.fmt(val)}${sr}</td>`;
-              }).join('')}
-              <td><span class="status ${v.status}">${v.text}</span></td>
-              <td><button class="x ghost small" data-remove="${s.id}" aria-label="Remove ${escapeHtml(s.label)}">Remove</button></td>
-            </tr>`;
-          })
-          .join('')}
+        ${app.scenarios.map((s) => {
+          const st = s.scan.stats;
+          const v = verdictFor(st);
+          const badgeClass = v.status === 'go' ? 'bg-emerald-100 text-emerald-800'
+                           : v.status === 'marginal' ? 'bg-amber-100 text-amber-800'
+                           : 'bg-red-100 text-red-800';
+          const lat = s.site.lat != null ? s.site.lat : 0;
+          const lon = s.site.lon != null ? s.site.lon : 0;
+          const darkGe = st.longestDarkOpenEnded && st.longestDarkH > 0 ? '≥ ' : '';
+          const batGe = st.batteryOpenEnded && st.batteryKWh > 0 ? '≥ ' : '';
+          return `
+            <tr class="border-b border-slate-100 hover:bg-slate-50 text-right mono">
+              <td class="text-left py-2.5 px-2 font-sans">
+                <button type="button" data-open-sc="${s.id}" class="font-bold text-blue-600 hover:underline text-left">${esc(s.label)}</button>
+                <div class="mono text-[10px] text-slate-400">${fmtLatLon(lat, lon, 2)} · ${new Date(s.startMs).toISOString().slice(0, 10)} · ${s.windowDays}d</div>
+              </td>
+              <td class="py-2 px-2">${pct(st.litFraction, 1)}</td>
+              <td class="py-2 px-2">${st.avgPowerW.toFixed(0)} W</td>
+              <td class="py-2 px-2">${darkGe}${fmtHours(st.longestDarkH)}</td>
+              <td class="py-2 px-2">${batGe}${st.batteryKWh.toFixed(1)} kWh</td>
+              <td class="py-2 px-2">${pct(st.earthVisibleFraction, 1)}</td>
+              <td class="py-2 px-2">${pct(st.dteFraction, 1)}</td>
+              <td class="py-2 px-2 font-sans"><span class="px-2 py-0.5 rounded text-[10px] font-bold ${badgeClass}">${v.text}</span></td>
+              <td class="py-2 px-2 font-sans"><button type="button" data-rm-sc="${s.id}" class="text-slate-400 hover:text-red-600">✕</button></td>
+            </tr>
+          `;
+        }).join('')}
       </tbody>
     </table>
-    <p class="fine">“≥” marks a value cut off by the start or end of the window, so the true value may be larger. Highlights mark the best and worst value only where they differ by more than about 3 percentage points, 12 hours or 5–10%. Screening uses illustrative thresholds: sunlit ≥ ${CRITERIA.minLit * 100}% with longest darkness ≤ ${CRITERIA.maxDarkH} h for power, and DTE ≥ ${CRITERIA.minDte * 100}% with longest blackout ≤ ${CRITERIA.maxBlackoutH} h for communications. Adjust them to your mission.</p>`;
-  for (const s of scenarios) {
-    const c = root.querySelector(`[data-strip="${s.id}"]`);
-    if (c) drawStrip(c, s.scan);
-  }
-  root.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => onSelect(b.dataset.open)));
-  root.querySelectorAll('[data-remove]').forEach((b) => b.addEventListener('click', () => onRemove(b.dataset.remove)));
+  `;
+
+  container.querySelectorAll('[data-open-sc]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const sc = app.scenarios.find((x) => x.id === btn.dataset.openSc);
+      if (sc) onOpenScenario(sc);
+    });
+  });
+
+  container.querySelectorAll('[data-rm-sc]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      app.scenarios = app.scenarios.filter((x) => x.id !== btn.dataset.rmSc);
+      const countEl = document.getElementById('headerCompareCount');
+      if (countEl) countEl.textContent = String(app.scenarios.length);
+      renderCompareTable(container, app, onOpenScenario);
+    });
+  });
 }
 
 export function scenariosToCsv(scenarios) {
@@ -97,8 +119,8 @@ export function scenariosToCsv(scenarios) {
   const head = ['label', 'lat', 'lon', 'window_start_utc', 'window_days', ...COLUMNS.map((c) => c.key), ...OPEN.map((c) => `${c.key}_cut_by_window`), 'screening'];
   const rows = scenarios.map((s) => [
     `"${s.label.replace(/"/g, '""')}"`,
-    s.site.lat.toFixed(5),
-    s.site.lon.toFixed(5),
+    (s.site.lat ?? 0).toFixed(5),
+    (s.site.lon ?? 0).toFixed(5),
     new Date(s.startMs).toISOString(),
     s.windowDays,
     ...COLUMNS.map((c) => (+s.scan.stats[c.key]).toFixed(4)),
@@ -106,4 +128,15 @@ export function scenariosToCsv(scenarios) {
     verdictFor(s.scan.stats).text,
   ]);
   return [head.join(','), ...rows.map((r) => r.join(','))].join('\n');
+}
+
+export function exportCompareCsv(scenarios) {
+  if (!scenarios || !scenarios.length) return false;
+  const csv = scenariosToCsv(scenarios);
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'lunar-site-scenarios.csv';
+  a.click();
+  return true;
 }

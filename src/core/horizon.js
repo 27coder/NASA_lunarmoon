@@ -5,10 +5,13 @@
 // curve of the sphere itself) cuts the sky in each direction. We march rays
 // outward along great circles over the LOLA grids and keep the steepest angle.
 
+import precomputedData from '../data/precomputedHorizons.js';
+import { sampleDemHeight } from './dem.js';
 import { MOON_RADIUS_M, RAD, destination, sphereHorizonDip, toSouthPolar } from './geo.js';
 
 export const AZ_STEP_DEG = 0.5;
 export const AZ_COUNT = Math.round(360 / AZ_STEP_DEG);
+export const precomputedHorizons = precomputedData;
 
 /** Wrap one south-polar stereographic int16 grid (see tools/build_polar_dem.py). */
 export function createGrid(meta, heights) {
@@ -104,9 +107,6 @@ export function computeHorizon(terrain, lat, lon, { mastHeight = 2, maxDistM = 3
   const minStep = ground.cell / 2;
   for (let i = 0; i < AZ_COUNT; i++) {
     const az = i * AZ_STEP_DEG;
-    // Start from "no terrain seen" rather than the bare-sphere dip: a site on a
-    // high ridge looks *down* on its horizon (often 1-2 deg below level), and
-    // that negative horizon is exactly what keeps polar ridges in sunlight.
     let best = -90;
     let bestDist = 0;
     let s = Math.max(60, ground.cell * 0.75);
@@ -137,11 +137,72 @@ export function computeHorizon(terrain, lat, lon, { mastHeight = 2, maxDistM = 3
   };
 }
 
+/** Compute or look up compact 180-sample site horizon with mast adjustment. */
+export function computeSiteHorizon(site, mastHeight = 2) {
+  const pre = precomputedHorizons[site.id];
+  const mastDelta = (mastHeight - 2) * 0.012;
+  if (pre) {
+    const el180 = pre.el180.map((v) => v - mastDelta);
+    return {
+      el180,
+      groundHeight: pre.groundHeight,
+      mastHeight,
+      source: pre.source,
+      terrain: pre.terrain,
+    };
+  }
+  const h0 = sampleDemHeight(site.lat, site.lon);
+  const dip = sphereHorizonDip(mastHeight);
+  if (h0 == null) {
+    return {
+      el180: new Array(180).fill(dip),
+      groundHeight: 0,
+      mastHeight,
+      source: 'smooth sphere (outside polar DEM)',
+      terrain: false,
+    };
+  }
+  const r0 = MOON_RADIUS_M + h0 + mastHeight;
+  const el180 = new Array(180);
+  for (let k = 0; k < 180; k++) {
+    const az = k * 2;
+    let best = -90;
+    for (let s = 4000; s <= 180000; s += 4500) {
+      const p = destination(site.lat, site.lon, az, s);
+      const h1 = sampleDemHeight(p.lat, p.lon);
+      if (h1 != null) {
+        const theta = s / MOON_RADIUS_M;
+        const r1 = MOON_RADIUS_M + h1;
+        const el = Math.atan2(r1 * Math.cos(theta) - r0, r1 * Math.sin(theta)) * RAD;
+        if (el > best) best = el;
+      }
+    }
+    el180[k] = best > -90 ? best : dip;
+  }
+  return {
+    el180,
+    groundHeight: Math.round(h0),
+    mastHeight,
+    source: 'LOLA south-polar grid',
+    terrain: true,
+  };
+}
+
 /** Horizon elevation (deg) at any azimuth, linearly interpolated. */
 export function horizonAt(horizon, azDeg) {
-  const f = (((azDeg % 360) + 360) % 360) / AZ_STEP_DEG;
-  const i0 = Math.floor(f) % AZ_COUNT;
-  const i1 = (i0 + 1) % AZ_COUNT;
-  const t = f - Math.floor(f);
-  return horizon.elevations[i0] * (1 - t) + horizon.elevations[i1] * t;
+  if (horizon.el180) {
+    const f = (((azDeg % 360) + 360) % 360) / 2;
+    const i0 = Math.floor(f) % 180;
+    const i1 = (i0 + 1) % 180;
+    const t = f - Math.floor(f);
+    return horizon.el180[i0] * (1 - t) + horizon.el180[i1] * t;
+  }
+  if (horizon.elevations) {
+    const f = (((azDeg % 360) + 360) % 360) / AZ_STEP_DEG;
+    const i0 = Math.floor(f) % AZ_COUNT;
+    const i1 = (i0 + 1) % AZ_COUNT;
+    const t = f - Math.floor(f);
+    return horizon.elevations[i0] * (1 - t) + horizon.elevations[i1] * t;
+  }
+  return 0;
 }

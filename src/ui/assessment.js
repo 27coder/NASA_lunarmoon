@@ -1,149 +1,265 @@
-// Right-hand panel: the selected scenario's current status, next events, sky
-// plot, window statistics and link details. The skeleton is built once per site
-// so the sky plot canvas survives the frequent number updates.
+// Results / Assessment panel rendering site metrics, LOLA skyline, power, and DTE margin.
+import { clamp, deg, esc, fmtDuration, fmtHours, fmtLatLon, fmtUtc, pct } from './format.js';
+import { drawSkyPlot } from './skyplot.js';
 
-import { RADIO_PRESETS } from '../core/comms.js';
-import { SITE_GROUPS } from '../core/sites.js';
-import { compass, deg, escapeHtml, fmtDuration, fmtHours, fmtLatLon, fmtRate, fmtUtc, pct } from './format.js';
-import { learnForSite } from './learn.js';
-import { term } from './glossary.js';
+export function findNextTransition(arr, times, nowMs, scan) {
+  if (!arr || !times || !scan) return null;
+  const idx = Math.max(0, Math.floor((nowMs - scan.startMs) / scan.stepMs));
+  const cur = !!arr[Math.min(arr.length - 1, idx)];
+  for (let i = idx + 1; i < arr.length; i++) {
+    if (!!arr[i] !== cur) return times[i];
+  }
+  return null;
+}
 
-const PRECISION = {
-  surveyed: 'surveyed position',
-  reported: 'reported position',
-  approx: 'approximate position',
-  custom: 'custom point',
-  computed: 'point chosen from LOLA terrain',
-};
+export function renderAssessmentPanel(container, app, callbacks = {}) {
+  if (!container || !app.ctx || !app.scan || !app.lastNow) return;
+  const now = app.lastNow;
+  const st = app.scan.stats;
+  const sunUp = now.sun.fraction > 0;
+  const earthUp = now.earth.los;
+  const nextSunMs = findNextTransition(app.scan.series.lit, app.scan.series.times, app.timeMs, app.scan);
+  const nextEarthMs = findNextTransition(app.scan.series.los, app.scan.series.times, app.timeMs, app.scan);
 
-// Plain-language status text. Status is always shown as shape + text + colour.
-const POWER_TEXT = { go: 'Meets load', marginal: 'Below load', 'no-go': 'No sunlight' };
-const COMMS_TEXT = { go: 'Available', marginal: 'Degraded', 'no-go': 'Unavailable' };
-const status = (cls, text) => `<span class="status ${cls}">${text}</span>`;
+  if (!app.uiCards) {
+    app.uiCards = { instant: true, skyplot: true, summary: true };
+    try {
+      const saved = JSON.parse(localStorage.getItem('lsp.uiCards') || '{}');
+      if (typeof saved.instant === 'boolean') app.uiCards.instant = saved.instant;
+      if (typeof saved.skyplot === 'boolean') app.uiCards.skyplot = saved.skyplot;
+      if (typeof saved.summary === 'boolean') app.uiCards.summary = saved.summary;
+    } catch {}
+  }
 
-export function renderSkeleton(root, site, ctx) {
-  const group = site.group ? SITE_GROUPS[site.group] : 'Custom point';
-  root.innerHTML = `
-    <div class="site-title">
-      <div>
-        <h2>${escapeHtml(site.name)}</h2>
-        <p class="site-meta"><span class="mono">${fmtLatLon(site.lat, site.lon)}</span> · ${escapeHtml(group)}${site.group === 'computed' || !site.group ? '' : ` · ${PRECISION[site.precision ?? 'custom']}`}</p>
-        <p class="site-meta">Terrain: ${escapeHtml(ctx.horizon.source)}${ctx.horizon.terrain ? ` · ground <span class="mono">${ctx.groundHeight >= 0 ? '+' : '−'}${Math.abs(ctx.groundHeight).toFixed(0)} m</span>` : ''} ${term('lola')}</p>
+  const overallStatus =
+    now.powerStatus === 'go' && now.commsStatus === 'go'
+      ? { cls: 'bg-emerald-50 border-emerald-300 text-emerald-900', dot: 'bg-emerald-600', label: 'GO · Mission Ready at Current Time', desc: 'Solar array exceeds spacecraft load and direct-to-Earth radio link closes.' }
+      : now.powerStatus === 'no-go' && now.commsStatus === 'no-go'
+      ? { cls: 'bg-red-50 border-red-300 text-red-900', dot: 'bg-red-600', label: 'NO-GO · In Darkness & Radio Blackout', desc: 'Both the Sun and Earth are blocked by the local lunar horizon right now.' }
+      : { cls: 'bg-amber-50 border-amber-300 text-amber-900', dot: 'bg-amber-600', label: 'CAUTION · Partial Constraint Active', desc: now.powerStatus !== 'go' ? 'Solar power is below continuous load; running on battery.' : (now.commsReasons[0] || 'Earth link is degraded or blocked by terrain.') };
+
+  const glossBtn = (k) => `<button type="button" data-gloss="${k}" class="inline-flex items-center justify-center w-4 h-4 rounded-full bg-slate-100 hover:bg-blue-100 text-slate-600 hover:text-blue-700 border border-slate-300 text-[10px] font-bold ml-1" title="Definition">?</button>`;
+
+  const allFolded = !app.uiCards.instant && !app.uiCards.skyplot && !app.uiCards.summary;
+
+  container.innerHTML = `
+    <div class="space-y-1.5">
+      <div class="flex items-start justify-between gap-2">
+        <div>
+          <h2 class="text-base font-bold text-slate-900 leading-snug">${esc(app.site.name)}</h2>
+          <p class="mono text-[11px] text-slate-500">${fmtLatLon(app.site.lat, app.site.lon)} · ${esc(app.ctx.horizon.source)} (${app.ctx.groundHeight >= 0 ? '+' : '−'}${Math.abs(app.ctx.groundHeight)} m) ${glossBtn('lola')}</p>
+        </div>
+        <div class="flex items-center gap-1">
+          <button type="button" id="toggleAllCardsBtn" class="px-2 py-0.5 rounded text-[10px] font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200" title="Fold or unfold all sections">
+            ${allFolded ? 'Unfold All' : 'Fold All'}
+          </button>
+          <button type="button" id="collapseResultsBtn" class="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 text-xs font-bold leading-none" title="Minimize Assessment panel" aria-label="Minimize Assessment panel">
+            ▸
+          </button>
+        </div>
       </div>
-      <div class="actions">
-        <button id="addThis" class="small" title="Add this site and date to the comparison table">Add to compare</button>
-        <button id="copyLink" class="small ghost" title="Copy a link to this scenario">Copy link</button>
+      <div class="flex items-center gap-1.5 pt-0.5">
+        <button type="button" id="panelAddCompareBtn" class="px-2.5 py-1 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800">+ Add to Compare</button>
+        <button type="button" id="panelCopyLinkBtn" class="px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-slate-700 text-xs font-medium hover:bg-slate-50">Copy Link</button>
       </div>
     </div>
-    ${site.note ? `<div class="note">${escapeHtml(site.note)}</div>` : ''}
-    ${ctx.horizon.terrain ? '' : `<div class="note">No bundled LOLA grid covers this point (the grids span the south pole to 75°S), so the horizon is the bare lunar sphere. Away from the poles the Sun climbs high, so local terrain matters much less.</div>`}
-    <div class="verdicts">
-      <div class="verdict" id="vPower"></div>
-      <div class="verdict" id="vComms"></div>
+
+    <div class="p-2.5 rounded-xl border ${overallStatus.cls} space-y-0.5">
+      <div class="flex items-center gap-2 font-bold text-xs">
+        <span class="w-2.5 h-2.5 rounded-full ${overallStatus.dot}"></span>
+        <span>${overallStatus.label}</span>
+      </div>
+      <p class="text-[11px] opacity-90 pl-4">${esc(overallStatus.desc)}</p>
     </div>
-    <div class="countdowns">
-      <div class="countdown sun" id="cdSun"></div>
-      <div class="countdown earth" id="cdEarth"></div>
+
+    ${app.site.note ? `<div class="p-2.5 rounded-xl bg-slate-50 border-l-4 border-slate-400 text-xs text-slate-700">${esc(app.site.note)}</div>` : ''}
+
+    ${app.learnExplain ? `
+      <div class="p-2.5 rounded-xl bg-blue-50 border-l-4 border-blue-600 text-xs text-slate-800 space-y-1">
+        <strong class="block text-blue-900">💡 Plain-English Explainer:</strong>
+        <p>${Math.abs(app.site.lat) > 80
+          ? `Near ${Math.abs(app.site.lat).toFixed(1)}°S, the Moon’s 1.54° tilt keeps the Sun skimming just above the horizon. A ridge crest stays lit for weeks, while crater floors right next door never see the Sun.`
+          : app.site.lon > 100 || app.site.lon < -100
+          ? `This site is on the Moon’s far side. Because the Moon is tidally locked to Earth, Earth never rises here—missions require a relay satellite.`
+          : `Away from the poles, a lunar day lasts ~14 Earth days followed by a freezing 14-day lunar night.`}</p>
+      </div>
+    ` : ''}
+
+    <!-- CARD 1: INSTANT GAUGES (SOLAR & EARTH) -->
+    <div class="p-3 rounded-xl border border-slate-200 bg-white shadow-sm space-y-2">
+      <div class="flex items-center justify-between cursor-pointer select-none" data-card-toggle="instant">
+        <div class="flex items-center gap-1.5 font-bold text-xs text-slate-800">
+          <span>☀️ Solar &amp; 🌍 Earth Gauges</span>
+        </div>
+        <div class="flex items-center gap-2">
+          ${!app.uiCards.instant ? `<span class="mono text-[11px] text-slate-600 font-medium">${now.sun.watts.toFixed(0)}W · ${deg(now.earth.clearance, 1)}</span>` : ''}
+          <button type="button" class="text-xs text-slate-400 hover:text-slate-700 p-0.5" title="Toggle section">
+            ${app.uiCards.instant ? '▾' : '▸'}
+          </button>
+        </div>
+      </div>
+
+      ${app.uiCards.instant ? `
+        <div class="grid grid-cols-2 gap-2.5 pt-1">
+          <div class="p-2.5 rounded-lg border border-slate-200 bg-slate-50/60 space-y-1">
+            <div class="flex items-center justify-between text-[11px] font-semibold text-slate-600">
+              <span>☀️ Solar Power</span>
+              <span class="px-1.5 py-0.2 rounded text-[10px] font-bold ${now.powerStatus === 'go' ? 'bg-emerald-100 text-emerald-800' : now.powerStatus === 'marginal' ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-800'}">
+                ${now.powerStatus === 'go' ? 'Meets load' : now.powerStatus === 'marginal' ? 'Below load' : '0 W Dark'}
+              </span>
+            </div>
+            <div class="mono text-2xl font-bold text-slate-900">${now.sun.watts.toFixed(0)} W</div>
+            <div class="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
+              <div class="h-full bg-amber-500" style="width:${clamp((now.sun.watts / Math.max(1, app.config.power.loadW * 4)) * 100, 0, 100)}%"></div>
+            </div>
+            <p class="text-[11px] text-slate-500">Load ${app.config.power.loadW} W · Sun ${deg(now.sun.el)} (${pct(now.sun.fraction)} disk) ${glossBtn('disk')}</p>
+            <div class="pt-1 border-t border-slate-200 text-[11px] text-slate-600 flex justify-between">
+              <span>${sunUp ? 'Sunset in:' : 'Sunrise in:'}</span>
+              <strong class="mono">${nextSunMs ? fmtDuration(nextSunMs - app.timeMs) : 'Over 30 d'}</strong>
+            </div>
+          </div>
+
+          <div class="p-2.5 rounded-lg border border-slate-200 bg-slate-50/60 space-y-1">
+            <div class="flex items-center justify-between text-[11px] font-semibold text-slate-600">
+              <span>🌍 Earth Link</span>
+              <span class="px-1.5 py-0.2 rounded text-[10px] font-bold ${now.commsStatus === 'go' ? 'bg-emerald-100 text-emerald-800' : now.commsStatus === 'marginal' ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-800'}">
+                ${now.commsStatus === 'go' ? 'Available' : now.commsStatus === 'marginal' ? 'Grazing' : 'Blocked'}
+              </span>
+            </div>
+            <div class="mono text-2xl font-bold text-slate-900">${deg(now.earth.clearance, 1)}</div>
+            <div class="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
+              <div class="h-full bg-blue-600" style="width:${clamp(((now.earth.clearance + 4) / 14) * 100, 0, 100)}%"></div>
+            </div>
+            <p class="text-[11px] text-slate-500">Clearance · ${now.earth.lightTimeS.toFixed(2)}s 1-way ${glossBtn('dte')}</p>
+            <div class="pt-1 border-t border-slate-200 text-[11px] text-slate-600 flex justify-between">
+              <span>${earthUp ? 'Earthset in:' : 'Earthrise in:'}</span>
+              <strong class="mono">${nextEarthMs ? fmtDuration(nextEarthMs - app.timeMs) : (earthUp ? 'Stays up' : 'Stays down')}</strong>
+            </div>
+          </div>
+        </div>
+      ` : ''}
     </div>
-    <div class="learn" id="learnTop"></div>
-    <div class="block" id="skyBlock">
-      <h3>Sky from the site ${term('horizon')} <small>terrain horizon with Sun and Earth paths over the window</small></h3>
-      <canvas id="skyplot" role="img" aria-label="Sky plot of the terrain horizon with the Sun and Earth paths"></canvas>
-      <div class="sky-legend" aria-hidden="true"><span class="k-terrain">Terrain (LOLA)</span><span class="k-sun">Sun</span><span class="k-earth">Earth</span></div>
-      <div class="learn" id="learnSky"></div>
+
+    <!-- CARD 2: 360° SKY & TERRAIN HORIZON SKYLINE -->
+    <div class="p-3 rounded-xl border border-slate-200 bg-slate-50/60 space-y-1.5">
+      <div class="flex items-center justify-between cursor-pointer select-none" data-card-toggle="skyplot">
+        <div class="flex items-center gap-1.5 font-bold text-xs text-slate-800">
+          <span>360° Sky &amp; Terrain Horizon ${glossBtn('horizon')}</span>
+        </div>
+        <div class="flex items-center gap-2">
+          ${!app.uiCards.skyplot ? `<span class="text-[10px] text-slate-500 font-mono">${esc(app.ctx.horizon.source)}</span>` : `<span class="text-[10px] text-slate-500">Sun &amp; Earth paths</span>`}
+          <button type="button" class="text-xs text-slate-400 hover:text-slate-700 p-0.5" title="Toggle section">
+            ${app.uiCards.skyplot ? '▾' : '▸'}
+          </button>
+        </div>
+      </div>
+      ${app.uiCards.skyplot ? `
+        <canvas id="skyplotCanvas" class="w-full h-[175px] block rounded-lg border border-slate-200 bg-white mt-1"></canvas>
+      ` : ''}
     </div>
-    <div class="block" id="windowBlock">
-      <h3>Window summary <small id="winLabel"></small></h3>
-      <dl class="kv" id="winStats"></dl>
-      <p class="fine">Percentages count time with any part of the Sun's or Earth's disk above the terrain, the definition NASA Goddard uses for its polar illumination maps. Power, energy and battery values are estimates from the spacecraft assumptions. Near ridge crests, results depend strongly on the 240 m terrain resolution.</p>
-      <div class="learn" id="learnWindow"></div>
-    </div>
-    <div class="block" id="linkBlock">
-      <h3>Direct-to-Earth link ${term('dte')} <small id="radioLabel"></small></h3>
-      <dl class="kv" id="linkStats"></dl>
-      <div class="dsn" id="dsnChips" role="group" aria-label="Moon elevation at each Deep Space Network complex"></div>
-      <p class="fine">First-order link budget to a DSN 34 m antenna ${term('dsn')}. Relay satellites and other ground networks are not modelled.</p>
-      <div class="learn" id="learnLink"></div>
+
+    <!-- CARD 3: WINDOW SUMMARY -->
+    <div class="p-3 rounded-xl border border-slate-200 bg-white space-y-2.5">
+      <div class="flex items-center justify-between cursor-pointer select-none" data-card-toggle="summary">
+        <div>
+          <h3 class="font-bold text-xs text-slate-800">Window Summary (${st.days} days)</h3>
+          <p class="mono text-[10px] text-slate-500">${fmtUtc(app.scan.startMs).slice(0, 10)} → ${st.days} d</p>
+        </div>
+        <div class="flex items-center gap-2">
+          ${!app.uiCards.summary ? `<span class="mono text-[11px] text-slate-600 font-semibold">${pct(st.litFraction, 0)} lit · ${fmtHours(st.longestDarkH)} dark</span>` : ''}
+          <button type="button" class="text-xs text-slate-400 hover:text-slate-700 p-0.5" title="Toggle section">
+            ${app.uiCards.summary ? '▾' : '▸'}
+          </button>
+        </div>
+      </div>
+
+      ${app.uiCards.summary ? `
+        <div class="flex justify-end">
+          <button type="button" id="toggleTelemetryBtn" class="px-2 py-0.5 rounded-lg text-[10px] font-semibold border ${app.engineerTelemetry ? 'bg-slate-900 text-white border-slate-900' : 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200'}">
+            ${app.engineerTelemetry ? 'Hide RF Details' : '+ Engineer Telemetry'}
+          </button>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2 text-xs">
+          <div class="p-2 rounded-lg bg-slate-50 border border-slate-200">
+            <span class="text-[11px] text-slate-500 block">Time Sunlit</span>
+            <strong class="mono text-sm text-slate-900">${pct(st.litFraction, 1)}</strong>
+            <span class="text-[10px] text-slate-500 block">Avg ${st.avgPowerW.toFixed(0)} W</span>
+          </div>
+          <div class="p-2 rounded-lg bg-slate-50 border border-slate-200">
+            <span class="text-[11px] text-slate-500 block">Longest Night</span>
+            <strong class="mono text-sm text-slate-900">${fmtHours(st.longestDarkH)}</strong>
+            <span class="text-[10px] text-slate-500 block">Battery: ${st.batteryKWh.toFixed(1)} kWh</span>
+          </div>
+          <div class="p-2 rounded-lg bg-slate-50 border border-slate-200">
+            <span class="text-[11px] text-slate-500 block">Earth Visible</span>
+            <strong class="mono text-sm text-slate-900">${pct(st.earthVisibleFraction, 1)}</strong>
+            <span class="text-[10px] text-slate-500 block">DTE link: ${pct(st.dteFraction, 1)}</span>
+          </div>
+          <div class="p-2 rounded-lg bg-slate-50 border border-slate-200">
+            <span class="text-[11px] text-slate-500 block">Longest Blackout</span>
+            <strong class="mono text-sm text-slate-900">${fmtHours(st.longestBlackoutH)}</strong>
+            <span class="text-[10px] text-slate-500 block">No DTE contact</span>
+          </div>
+        </div>
+
+        ${app.engineerTelemetry ? `
+          <div class="pt-2 border-t border-slate-200 space-y-2 text-xs">
+            <div class="font-bold text-slate-700 text-[11px] uppercase tracking-wider">Full RF Link Budget &amp; DSN Stations ${glossBtn('dsn')} ${glossBtn('margin')}</div>
+            <dl class="grid grid-cols-[1fr_auto] gap-y-1 text-[11px]">
+              <dt class="text-slate-500">Range to Earth</dt><dd class="mono font-medium">${(now.earth.distM / 1000).toFixed(0)} km</dd>
+              <dt class="text-slate-500">Sun elevation range</dt><dd class="mono font-medium">${deg(st.minSunEl, 1)} to ${deg(st.maxSunEl, 1)}</dd>
+              <dt class="text-slate-500">Earth elevation range</dt><dd class="mono font-medium">${deg(st.minEarthEl, 1)} to ${deg(st.maxEarthEl, 1)}</dd>
+              <dt class="text-slate-500">Free-space path loss</dt><dd class="mono font-medium">${now.link.fspl.toFixed(1)} dB</dd>
+              <dt class="text-slate-500">Received C/N₀</dt><dd class="mono font-medium">${now.earth.los ? `${now.link.cn0.toFixed(1)} dB-Hz` : 'Blocked'}</dd>
+              <dt class="text-slate-500">Link margin @ ${(app.config.comms.dataRateBps / 1000).toFixed(0)} kbps</dt><dd class="mono font-medium">${now.earth.los ? `${now.link.margin.toFixed(1)} dB` : 'Blocked'}</dd>
+            </dl>
+            <div class="flex flex-wrap gap-1 pt-1">
+              ${now.dsn.map((d) => `<span class="mono text-[10px] px-2 py-0.5 rounded border ${d.visible ? 'bg-emerald-50 border-emerald-300 text-emerald-800 font-semibold' : 'bg-slate-50 border-slate-200 text-slate-400'}">${d.name} ${deg(d.el, 0)}</span>`).join('')}
+            </div>
+          </div>
+        ` : ''}
+      ` : ''}
     </div>
   `;
-  const learn = learnForSite(site, ctx);
-  root.querySelector('#learnTop').innerHTML = learn.top;
-  root.querySelector('#learnSky').innerHTML = learn.sky;
-  root.querySelector('#learnWindow').innerHTML = learn.window;
-  root.querySelector('#learnLink').innerHTML = learn.link;
-}
 
-// While a "?" button inside a block is focused, pressed or hovered, rebuilding the
-// block (every frame during playback) would remove it mid-click.
-const busy = (el) => el.contains(document.activeElement) || !!el.querySelector('.gloss:hover, .gloss:active');
+  if (app.uiCards.skyplot) {
+    const skyCanvas = container.querySelector('#skyplotCanvas');
+    if (skyCanvas) drawSkyPlot(skyCanvas, app.ctx.horizon, app.scan, now);
+  }
 
-export function renderNow(root, { now, events, config }) {
-  const vPower = root.querySelector('#vPower');
-  if (!vPower) return;
-  const sun = now.sun;
-  // 8. "No sunlight" only when no part of the Sun is above the terrain.
-  const powerText = now.powerStatus === 'no-go' && sun.fraction > 0 ? 'No array output' : POWER_TEXT[now.powerStatus];
-  vPower.className = `verdict ${now.powerStatus}`;
-  if (!busy(vPower)) vPower.innerHTML = `
-    <div class="label"><span>Power</span>${status(now.powerStatus, powerText)}</div>
-    <div class="big">${sun.watts >= 1 ? `${sun.watts.toFixed(0)} W` : '0 W'}</div>
-    <div class="sub">Load ${config.power.loadW} W · Sun ${deg(sun.el)} at ${sun.az.toFixed(0)}° ${compass(sun.az)} · ${pct(sun.fraction)} of disk above terrain ${term('disk')}</div>`;
-
-  const earth = now.earth;
-  const vComms = root.querySelector('#vComms');
-  vComms.className = `verdict ${now.commsStatus}`;
-  vComms.innerHTML = `
-    <div class="label"><span>Earth link</span>${status(now.commsStatus, COMMS_TEXT[now.commsStatus])}</div>
-    <div class="big">${deg(earth.clearance, 1)}</div>
-    <div class="sub">Earth centre ${earth.clearance >= 0 ? 'above' : 'below'} terrain · ${earth.lightTimeS.toFixed(2)} s one-way${now.commsReasons.length ? ` · ${escapeHtml(now.commsReasons[0])}` : ''}</div>`;
-
-  const cd = (sel, kind, ev, upNow, labels) => {
-    const target = root.querySelector(sel);
-    const title = upNow ? labels.set : labels.rise;
-    if (!ev) {
-      target.innerHTML = `<div class="label">${title}</div><div class="value">Not within 40 days</div><div class="when">${kind} ${upNow ? 'stays up' : 'stays down'}</div>`;
-      return;
-    }
-    target.innerHTML = `<div class="label">${title} in</div><div class="value">${fmtDuration(ev.ms - now.ms)}</div><div class="when">${fmtUtc(ev.ms)}</div>`;
-  };
-  cd('#cdSun', 'Sun', events.sun, sun.fraction > 0, { set: 'Sunset', rise: 'Sunrise' });
-  cd('#cdEarth', 'Earth centre', events.earth, earth.los, { set: 'Earth centre sets', rise: 'Earth centre rises' });
-
-  const link = now.link;
-  const radio = RADIO_PRESETS[config.comms.preset];
-  root.querySelector('#radioLabel').textContent = `${radio.label}, ${radio.txPowerW} W`;
-  const cls = (v, good, ok) => (v >= good ? 'go' : v >= ok ? 'marginal' : 'no-go');
-  const rateNote = link.rateLimitedBy === 'radio' ? '<span class="qual">radio limit</span>' : '<span class="qual">link limit</span>';
-  const linkStats = root.querySelector('#linkStats');
-  if (!busy(linkStats)) linkStats.innerHTML = `
-    <dt>Range to Earth</dt><dd>${(earth.distM / 1000).toLocaleString('en-US', { maximumFractionDigits: 0 })} km</dd>
-    <dt>Light time one-way / round trip ${term('lightTime')}</dt><dd>${earth.lightTimeS.toFixed(3)} s / ${(2 * earth.lightTimeS).toFixed(2)} s</dd>
-    <dt>Earth azimuth / elevation</dt><dd>${earth.az.toFixed(1)}° / ${deg(earth.el)}</dd>
-    <dt>Terrain clearance (target ≥ ${config.comms.minClearanceDeg}°)</dt><dd data-status="${earth.los ? cls(earth.clearance, config.comms.minClearanceDeg, 0) : 'no-go'}">${deg(earth.clearance)}</dd>
-    <dt>Free-space loss</dt><dd>${link.fspl.toFixed(1)} dB</dd>
-    <dt>Received C/N₀ ${term('cn0')}</dt><dd>${earth.los ? `${link.cn0.toFixed(1)} dB-Hz` : 'blocked'}</dd>
-    <dt>Margin at ${(config.comms.dataRateBps / 1000).toFixed(0)} kbps ${term('margin')}</dt><dd>${earth.los ? `${link.margin.toFixed(1)} dB` : 'blocked'}</dd>
-    <dt>Highest rate at ${config.comms.targetMarginDb} dB margin</dt><dd>${earth.los ? `${fmtRate(link.maxRateBps)}${rateNote}` : 'blocked'}</dd>`;
-  root.querySelector('#dsnChips').innerHTML = now.dsn
-    .map((d) => `<span class="${d.visible ? 'on' : ''}" title="Moon elevation at ${d.name}: ${d.el.toFixed(1)}°">${d.name} ${d.el >= 0 ? '+' : '−'}${Math.abs(d.el).toFixed(0)}°${d.visible ? '' : ' (not usable)'}</span>`)
-    .join('');
-}
-
-export function renderWindow(root, { scan, config }) {
-  const el = root.querySelector('#winStats');
-  if (!el) return;
-  const s = scan.stats;
-  const open = (flag) => (flag ? '≥ ' : '');
-  root.querySelector('#winLabel').textContent = `${fmtUtc(scan.startMs).slice(0, 10)} → ${s.days.toFixed(0)} days`;
-  el.innerHTML = `
-    <dt>Time sunlit (any part of disk)</dt><dd>${pct(s.litFraction, 1)}</dd>
-    <dt>Average array output (estimate)</dt><dd>${s.avgPowerW.toFixed(0)} W</dd>
-    <dt>Energy generated (estimate)</dt><dd>${s.energyKWh.toFixed(0)} kWh</dd>
-    <dt>Longest continuous darkness</dt><dd>${open(s.longestDarkOpenEnded && s.longestDarkH > 0)}${fmtHours(s.longestDarkH)}</dd>
-    <dt>Battery to carry ${config.power.loadW} W (estimate)</dt><dd>${open(s.batteryOpenEnded)}${s.batteryKWh.toFixed(1)} kWh</dd>
-    <dt>Sun elevation range</dt><dd>${deg(s.minSunEl, 1)} to ${deg(s.maxSunEl, 1)}</dd>
-    <dt>Earth visible (any part of disk)</dt><dd>${pct(s.earthVisibleFraction, 1)}</dd>
-    <dt>Direct-to-Earth link available</dt><dd>${pct(s.dteFraction, 1)}</dd>
-    <dt>Longest communication blackout</dt><dd>${open(s.longestBlackoutOpenEnded && s.longestBlackoutH > 0)}${fmtHours(s.longestBlackoutH)}</dd>
-    <dt>Earth elevation range</dt><dd>${deg(s.minEarthEl, 1)} to ${deg(s.maxEarthEl, 1)}</dd>`;
+  container.querySelector('#panelAddCompareBtn')?.addEventListener('click', () => {
+    callbacks.onAddCompare?.();
+  });
+  container.querySelector('#panelCopyLinkBtn')?.addEventListener('click', () => {
+    callbacks.onCopyLink?.();
+  });
+  container.querySelector('#collapseResultsBtn')?.addEventListener('click', () => {
+    callbacks.onCollapseResults?.();
+  });
+  container.querySelector('#toggleAllCardsBtn')?.addEventListener('click', () => {
+    const nextState = allFolded;
+    app.uiCards.instant = nextState;
+    app.uiCards.skyplot = nextState;
+    app.uiCards.summary = nextState;
+    try { localStorage.setItem('lsp.uiCards', JSON.stringify(app.uiCards)); } catch {}
+    renderAssessmentPanel(container, app, callbacks);
+  });
+  container.querySelectorAll('[data-card-toggle]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const cardKey = el.dataset.cardToggle;
+      if (cardKey && app.uiCards[cardKey] !== undefined) {
+        app.uiCards[cardKey] = !app.uiCards[cardKey];
+        try { localStorage.setItem('lsp.uiCards', JSON.stringify(app.uiCards)); } catch {}
+        renderAssessmentPanel(container, app, callbacks);
+      }
+    });
+  });
+  container.querySelector('#toggleTelemetryBtn')?.addEventListener('click', () => {
+    app.engineerTelemetry = !app.engineerTelemetry;
+    renderAssessmentPanel(container, app, callbacks);
+  });
+  container.querySelectorAll('[data-gloss]').forEach((btn) => {
+    btn.addEventListener('click', () => callbacks.onOpenGlossary?.(btn.dataset.gloss));
+  });
 }

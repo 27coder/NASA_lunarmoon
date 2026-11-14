@@ -1,11 +1,13 @@
-// "Lumi", a small original lander character used as a friendly guide.
+// Lumi the Lunar Lander Mascot SVG generator.
 
-export function mascot(mood = 'happy', size = 120) {
-  const mouth = {
-    happy: '<path d="M52 66 Q60 74 68 66" class="m-line"/>',
-    ok: '<path d="M53 68 L67 68" class="m-line"/>',
-    worried: '<path d="M52 71 Q60 64 68 71" class="m-line"/>',
-  }[mood] ?? '';
+export function mascotSvg(mood = 'happy', size = 84) {
+  const mouth =
+    mood === 'happy'
+      ? '<path d="M52 66 Q60 74 68 66" class="m-line"/>'
+      : mood === 'worried'
+      ? '<path d="M52 71 Q60 64 68 71" class="m-line"/>'
+      : '<path d="M53 68 L67 68" class="m-line"/>';
+
   return `<svg class="mascot" width="${size}" height="${size}" viewBox="0 0 120 120" aria-hidden="true">
     <ellipse cx="60" cy="112" rx="40" ry="5" class="m-shadow"/>
     <line x1="38" y1="82" x2="22" y2="106" class="m-leg"/><line x1="82" y1="82" x2="98" y2="106" class="m-leg"/>

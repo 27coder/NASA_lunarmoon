@@ -1,75 +1,27 @@
-export function fmtDuration(ms) {
-  if (ms == null || !Number.isFinite(ms)) return '—';
-  const sign = ms < 0 ? '−' : '';
-  let s = Math.abs(ms) / 1000;
-  const d = Math.floor(s / 86400);
-  s -= d * 86400;
-  const h = Math.floor(s / 3600);
-  s -= h * 3600;
-  const m = Math.floor(s / 60);
-  if (d > 0) return `${sign}${d} d ${h} h`;
-  if (h > 0) return `${sign}${h} h ${m} min`;
-  return `${sign}${m} min`;
+// Formatting and escaping helper functions.
+
+export const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+export const pct = (f, d = 0) => `${(f * 100).toFixed(d)}%`;
+export const deg = (v, d = 1) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(d)}°`;
+export const fmtLatLon = (lat, lon, d = 2) => `${Math.abs(lat).toFixed(d)}°${lat < 0 ? 'S' : 'N'} ${Math.abs(lon).toFixed(d)}°${lon < 0 ? 'W' : 'E'}`;
+export const fmtUtc = (ms) => { const iso = new Date(ms).toISOString(); return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`; };
+export const fmtHours = (h) => (h >= 48 ? `${(h / 24).toFixed(1)} d` : `${h.toFixed(0)} h`);
+export const fmtDuration = (ms) => {
+  if (!Number.isFinite(ms) || ms <= 0) return 'Over 30 days';
+  const d = Math.floor(ms / 86400000);
+  const h = Math.floor((ms % 86400000) / 3600000);
+  return d > 0 ? `${d} d ${h} h` : `${h} h`;
+};
+export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c]);
+
+export function toLocalInputValue(d) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
 
-export function fmtHours(h) {
-  if (!Number.isFinite(h)) return '—';
-  if (h >= 48) return `${(h / 24).toFixed(1)} d`;
-  return `${h.toFixed(h < 10 ? 1 : 0)} h`;
-}
-
-export const pct = (f, digits = 0) => `${(f * 100).toFixed(digits)}%`;
-export const deg = (v, digits = 2) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(digits)}°`;
-
-export function fmtLatLon(lat, lon, digits = 3) {
-  return `${Math.abs(lat).toFixed(digits)}°${lat < 0 ? 'S' : 'N'} ${Math.abs(lon).toFixed(digits)}°${lon < 0 ? 'W' : 'E'}`;
-}
-
-export function fmtUtc(ms, { seconds = false } = {}) {
-  const iso = new Date(ms).toISOString();
-  return `${iso.slice(0, 10)} ${iso.slice(11, seconds ? 19 : 16)} UTC`;
-}
-
-export function fmtRate(bps) {
-  if (!Number.isFinite(bps) || bps <= 0) return '—';
-  if (bps >= 1e6) return `${(bps / 1e6).toFixed(bps >= 1e7 ? 0 : 1)} Mbps`;
-  if (bps >= 1e3) return `${(bps / 1e3).toFixed(bps >= 1e4 ? 0 : 1)} kbps`;
-  return `${bps.toFixed(0)} bps`;
-}
-
-export function toLocalInputValue(ms) {
-  // datetime-local has no zone; the app treats it as UTC throughout.
-  return new Date(ms).toISOString().slice(0, 16);
-}
 export function fromLocalInputValue(v) {
-  const ms = Date.parse(`${v}:00Z`);
-  return Number.isFinite(ms) ? ms : null;
-}
-
-export function compass(az) {
-  const names = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
-  return names[Math.round(az / 22.5) % 16];
-}
-
-export function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-}
-
-/** Read a colour token from the stylesheet so canvas drawings follow the design system. */
-export function token(name) {
-  return getComputedStyle(document.documentElement).getPropertyValue(`--${name}`).trim();
-}
-
-/** Size a canvas backing store to its CSS box for crisp drawing. */
-export function fitCanvas(canvas) {
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
-  const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
-  const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
-  if (canvas.width !== w || canvas.height !== h) {
-    canvas.width = w;
-    canvas.height = h;
-  }
-  const ctx = canvas.getContext('2d');
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  return { ctx, w: canvas.clientWidth, h: canvas.clientHeight };
+  if (!v) return null;
+  const m = v.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  if (!m) return null;
+  return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]));
 }

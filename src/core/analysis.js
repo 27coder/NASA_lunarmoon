@@ -4,7 +4,7 @@
 
 import { enuBasis } from './geo.js';
 import { moonFixedState, topocentric } from './ephemeris.js';
-import { computeHorizon, horizonAt } from './horizon.js';
+import { computeHorizon, computeSiteHorizon, horizonAt } from './horizon.js';
 import { DEFAULT_POWER_CONFIG, solarPower } from './power.js';
 import {
   DEFAULT_COMMS_CONFIG,
@@ -20,22 +20,48 @@ export const DEFAULT_CONFIG = {
   comms: DEFAULT_COMMS_CONFIG,
 };
 
+export const POLE_LIMIT_DEG = 89.9999;
+
 /** Resolve terrain and horizon once per site so time scans stay cheap. */
-export function prepareSite(site, terrain, config = DEFAULT_CONFIG) {
+export function prepareSite(site, terrainOrConfig, maybeConfig) {
+  let terrain = null;
+  let config = DEFAULT_CONFIG;
+  if (terrainOrConfig && (typeof terrainOrConfig.sampleHeight === 'function' || typeof terrainOrConfig.heightAt === 'function' || terrainOrConfig.grids)) {
+    terrain = terrainOrConfig;
+    config = maybeConfig || DEFAULT_CONFIG;
+  } else if (terrainOrConfig && (terrainOrConfig.mastHeightM !== undefined || terrainOrConfig.power || terrainOrConfig.comms)) {
+    config = terrainOrConfig;
+    terrain = maybeConfig || null;
+  } else if (maybeConfig) {
+    config = maybeConfig;
+  }
+
   // At exactly ±90° azimuth and longitude are undefined; 1e-4° (about 3 m) away they are not.
   const lat = Math.max(-POLE_LIMIT_DEG, Math.min(POLE_LIMIT_DEG, site.lat));
-  const horizon = computeHorizon(terrain, lat, site.lon, { mastHeight: config.mastHeightM });
+  const mastHeight = config.mastHeightM ?? DEFAULT_CONFIG.mastHeightM;
+  let horizon;
+  if (terrain && typeof terrain.heightAt === 'function') {
+    horizon = computeHorizon(terrain, lat, site.lon, { mastHeight });
+  } else {
+    horizon = computeSiteHorizon({ ...site, lat }, mastHeight);
+  }
   return {
     ...site,
     lat,
     groundHeight: horizon.groundHeight,
-    height: horizon.groundHeight + config.mastHeightM,
+    height: horizon.groundHeight + mastHeight,
     basis: enuBasis(lat, site.lon),
     horizon,
   };
 }
 
-export const POLE_LIMIT_DEG = 89.9999;
+/** Convenience wrapper: scan a standard multi-day window with adaptive time step. */
+export function scanWindow(ctx, startMs, days, config = DEFAULT_CONFIG) {
+  const stepMin = days <= 15 ? 20 : days <= 30 ? 30 : days <= 90 ? 90 : 240;
+  const stepMs = stepMin * 60000;
+  const endMs = startMs + days * 86400000;
+  return scan(ctx, { startMs, endMs, stepMs }, config, { withDsn: true });
+}
 
 /** Everything about one site at one instant. */
 export function evaluate(ms, ctx, config = DEFAULT_CONFIG, { withDsn = true } = {}) {
